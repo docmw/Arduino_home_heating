@@ -1,5 +1,6 @@
 //Rooms includes
 
+#include <avr/wdt.h>
 #define DEBUG
 #ifdef DEBUG
 #define DEBUG_PRINT(x)     Serial.print(F(x))
@@ -101,6 +102,7 @@ void Rooms_init() {
       DEBUG_PRINT("Room ");
       DEBUG_PRINTDEC(i);
       DEBUG_PRINT(" initialized");
+      wdt_reset();
     }
   }
 }
@@ -108,6 +110,7 @@ void Rooms_init() {
 void Request_sensors() {
   for (uint8_t i = 0; i < rooms_size; i++) {
     rooms[i]->Request_sensor();
+    wdt_reset();
   }
 }
 
@@ -122,6 +125,7 @@ bool Conversion_Complete() {
 void Read_sensors() {
   for (uint8_t i = 0; i < rooms_size; i++) {
     rooms[i]->Read_sensor();
+    wdt_reset();
   }
 }
 
@@ -169,6 +173,7 @@ void Boiler_control() {
 
 
 void Eth_Received(char variableType, uint8_t variableIndex, String valueAsText) {
+  
   int value = valueAsText.toInt();
   uint8_t room_index;
   uint8_t temp_index;
@@ -218,6 +223,7 @@ void Eth_Received(char variableType, uint8_t variableIndex, String valueAsText) 
 }
 
 String Eth_Requested(char variableType, uint8_t variableIndex) {
+  static bool reset_log = false;
   int value;
   uint8_t room_index;
   uint8_t temp_index;
@@ -246,6 +252,16 @@ String Eth_Requested(char variableType, uint8_t variableIndex) {
       case 5:
         value = (int)now.year();
         break;
+      case 6:
+      ;
+      if (reset_log == false) {
+        value = 1;
+        reset_log = true;
+      }
+      else {
+        value = 0;
+      }
+      break;
       default:
         value = 0;
         break;
@@ -257,7 +273,7 @@ String Eth_Requested(char variableType, uint8_t variableIndex) {
 
 void setup()
 {
-  
+  wdt_enable(WDTO_8S);
   Serial.begin(115200);
   DEBUG_PRINT("start setup\n\r");
   Wire.begin();
@@ -281,7 +297,7 @@ void setup()
 
 
 void loop() {
-
+  wdt_reset();
   unsigned long current_time = millis();
   if ((current_time - last_sec_inc) >= 1000) {
     last_sec_inc = millis();

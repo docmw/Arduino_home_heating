@@ -96,19 +96,22 @@ void Network_begin(void (*Receive_callback)(char,uint8_t,String),String (*Reques
 
 
 void Virtuino_run() {
+  unsigned long client_read_time = 0;
   EthernetClient client = server.available();
   if (client) {
     if (debug) Serial.println("Connected");
     virtuino.readBuffer = "";           // clear Virtuino input buffer. The inputBuffer stores the incoming characters
     if (client.connected()) {
+      client_read_time = millis();
       while (client.available() > 0) {
         char c = client.read();         // read the incoming data
         virtuino.readBuffer += c;       // add the incoming character to Virtuino input buffer
         if (debug) Serial.write(c);
-        if (c == '\n') {
+        if ((c == '\n') || ((millis() - client_read_time) > 4000) ) {
           virtuino.readBuffer += '\0';
           break;
         }
+       
 
       }
       client.flush();
