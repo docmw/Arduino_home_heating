@@ -57,8 +57,8 @@ class Room
   
   private:
   uint8_t type;
-  OneWire *bus;
-  DS18B20 *sensor;
+  OneWire *bus = NULL;
+  DS18B20 *sensor = NULL;
   byte address[8];
   //DallasTemperature *sensor;
   //DeviceAddress dev_adr;
@@ -74,7 +74,7 @@ class Room
   uint8_t is_set;
   bool DHT_ok;
   bool heated;
-  DHT* dht;
+  DHT* dht = NULL;
   void Heater_set();
   bool Search_address();
   bool trigger;

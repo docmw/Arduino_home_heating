@@ -3,23 +3,31 @@
 
 Room::Room(uint8_t _hpin, uint16_t _eeprom_adr, float _temp_day, float _temp_night, uint8_t _pin, uint8_t _type, bool _trigger = false, bool _cb = true, int8_t _correction = 0, uint8_t _hys = 4) {
   correction = _correction;
-  heated = true;
   temp_read = 225;
   uint8_t port = digitalPinToPort(_hpin);
   heater_port = portOutputRegister(port);
   heater_bit = digitalPinToBitMask(_hpin);
-  Heater_set();
-  pinMode(_hpin, OUTPUT);
   type = _type;
   eeprom_adr = _eeprom_adr;
+  uint8_t epr_heated;
+  epr_heated = EEPROM.read(eeprom_adr + 4);
+  if (epr_heated > 0) {
+    heated = false;
+  }
+  else {
+    heated = true;
+  }
+  pinMode(_hpin, OUTPUT);
+
   trigger = _trigger;
   control_boiler = _cb;
+  Heater_set();
   sensor_ready = false;
   pin = _pin;
-  Sensor_init(pin);
+  //Sensor_init(pin);
   is_set = 0;
   Set_temp(DAY, _temp_day);
-  Set_temp(NIGHT, _temp_night);  
+  Set_temp(NIGHT, _temp_night);
   is_set = 1;
   forced = false;
   hysteresis = _hys;
@@ -41,11 +49,20 @@ Room::~Room() {
 }
 
 bool Room::Room_init() {
+  uint8_t epr_heated;
+  epr_heated = EEPROM.read(eeprom_adr + 4);
+  if (epr_heated > 0) {
+    DEBUG_PRINTLN("Heater start on");
+  }
+  else {
+    DEBUG_PRINTLN("Heater start off");
+  }
   Sensor_init(pin);
   return sensor_ready;
 }
 
 void Room::Sensor_init(uint8_t pin) {
+
   if (type == DHTSENS) {
     dht_pin = pin;
     dht = new DHT(pin, DHT22);
@@ -54,8 +71,10 @@ void Room::Sensor_init(uint8_t pin) {
     DEBUG_PRINTLN("DHT started");
   }
   else if (type == DS18B20SENS) {
+    if (bus != NULL) delete bus;
     bus = new OneWire(pin);
     if (Search_address()) {
+      if (sensor != NULL) delete sensor;
       sensor = new DS18B20(bus);
       sensor->begin();
       sensor_ready = true;
@@ -187,7 +206,7 @@ void Room::Read_sensor() {
 
   }
   else {
-    return;
+    temp_sensor = 220;
   }
   if (temp_sensor < -700 || temp_sensor == 0) {
     temp_sensor = temp_read_old;
@@ -201,7 +220,7 @@ void Room::Read_sensor() {
   }
   temp_sensor += (int16_t)correction;
   reading_buf += temp_sensor;
-  if(is_set == 1) {
+  if (is_set == 1) {
     temp_read = temp_sensor;
     is_set = 2;
   }
@@ -233,17 +252,18 @@ void Room::Control_temp(uint8_t _dn) {
     last_time_update = current_time - UPDATE_INTERVAL;
   }
   int16_t temp_delta = temp_set[_dn] - control_temp;
-  DEBUG_PRINTF(((float)temp_set[_dn]) / 10);
-  DEBUG_PRINTLN();
+  //DEBUG_PRINTF(((float)temp_set[_dn]) / 10);
+  //DEBUG_PRINTLN();
   if (temp_delta >= 1 && heated) {
     heated = false;
-
+    EEPROM.update(eeprom_adr + 4, 1);
     DEBUG_PRINTLN("not heated");
   }
   else if ((temp_delta <= ((-1) * (hysteresis))) && !heated) {
     heated = true;
     forced = false;
     DEBUG_PRINT("heated\n\r");
+    EEPROM.update(eeprom_adr + 4, 0);
   }
   Heater_set();
 
@@ -263,7 +283,7 @@ void Room::Heater_set () {
   if (heated == false) {
     if (!trigger) HEATER_RESET;
     else HEATER_SET;
-    //delay(1000);
+    //delay(200);
   }
   else if (heated == true) {
     forced = false;
@@ -286,14 +306,19 @@ bool Room::Search_address() {
     elapsedResetTimeout = millis() - beginResetTimeout;
     DEBUG_PRINT("BUS RESET");
     DEBUG_PRINTLN(millis());
-    if (elapsedResetTimeout > 1000)
+    if (elapsedResetTimeout > 1000) {
       return false;
+    }
     }*/
   bus->reset_search();
   beginResetTimeout = millis();
   while (bus->search(address))
   {
+    elapsedResetTimeout = millis() - beginResetTimeout;
     DEBUG_PRINT("BUS ADDRESS\n\r");
+    if (elapsedResetTimeout > 1000) {
+      return false;
+    }
     if (address[0] != 0x28)
       continue;
 
@@ -323,7 +348,7 @@ bool Room::Force_heating(uint8_t _dn) {
 
   }
   int16_t temp_delta = temp_set[_dn] - control_temp;
-  if ((temp_delta >= ((-1)*1))) {
+  if ((temp_delta >= ((-1) * 1))) {
     heated = false;
     forced = true;
     return true;

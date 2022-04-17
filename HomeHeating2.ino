@@ -25,7 +25,10 @@
 #define RELAY_3 34
 #define RELAY_2 35
 #define RELAY_1 36
+#define DS_VCC A6
+#define DS_GND A7
 
+#define BOILER_EPR_ADR 100
 
 //RTC includes
 #include <Wire.h>
@@ -37,13 +40,14 @@ uint8_t conversion_status = 0;
 
 Room kidroom (4, 0, 215, 210, 47, 1, false, false, 0, 3);
 Room office (5, 10, 215, 210, 49, 1, false, false, 8, 4);
-Room bathroom (34, 20, 215, 210, 40, 1, false, false);
+Room bathroom (34, 20, 215, 210, 40, 3, false, false);
 Room bedroom (7, 30, 215, 210, 46, 1, false, true, (-8), 5);
 Room door (30, 40, 215, 210, 48, 1, true, false);
 Room salon (29, 50, 215, 210, 28, 1, true, true, (-9));
 Room roof (37, 60, 215, 210, 41, 1, false, false);
 Room workshop (6, 70, 215, 210, 26, 1, false, false, 4);
-Room* rooms[] = {&kidroom, &office, &bathroom, &bedroom, &door, &salon, &roof, &workshop};
+Room water (RELAY_6, 80, 280, 500, A2, 1, false, false, 0, 5);
+Room* rooms[] = {&kidroom, &office, &bathroom, &bedroom, &door, &salon, &roof, &workshop, &water};
 uint8_t rooms_size = sizeof(rooms) / sizeof(rooms[0]);
 uint8_t tod = 0; //time of day, day = 0, night = 1,
 bool heating = false;
@@ -91,6 +95,7 @@ void Temperature_control() {
         if (now.minute() < 10) DEBUG_PRINT("0");
         DEBUG_PRINTDEC(now.minute());
         DEBUG_PRINTLN();
+        Boiler_control();
         break;
     }
   }
@@ -101,7 +106,7 @@ void Rooms_init() {
     if (rooms[i]->Room_init()) {
       DEBUG_PRINT("Room ");
       DEBUG_PRINTDEC(i);
-      DEBUG_PRINT(" initialized");
+      DEBUG_PRINTLN(" initialized");
       wdt_reset();
     }
   }
@@ -109,6 +114,9 @@ void Rooms_init() {
 
 void Request_sensors() {
   for (uint8_t i = 0; i < rooms_size; i++) {
+    DEBUG_PRINT("Requesting sensor room  ");
+    DEBUG_PRINTDEC(i);
+    DEBUG_PRINTLN("");
     rooms[i]->Request_sensor();
     wdt_reset();
   }
@@ -124,6 +132,9 @@ bool Conversion_Complete() {
 
 void Read_sensors() {
   for (uint8_t i = 0; i < rooms_size; i++) {
+    DEBUG_PRINT("Reading sensor room  ");
+    DEBUG_PRINTDEC(i);
+    DEBUG_PRINTLN("");
     rooms[i]->Read_sensor();
     wdt_reset();
   }
@@ -132,6 +143,7 @@ void Read_sensors() {
 void Heaters_control() {
   for (uint8_t i = 0; i < rooms_size; i++) {
     rooms[i]->Control_temp(tod);
+    wdt_reset();
   }
 }
 
@@ -148,6 +160,7 @@ void Boiler_control() {
     if (!(rooms[i]->Is_heated())) {
       if (!heating_started) {
         heating_started = true;
+        EEPROM.update(BOILER_EPR_ADR, 1);
         DEBUG_PRINTLN(F("Heating started"));
         if (bedroom.Force_heating(tod)) DEBUG_PRINTLN(F("Bedroom heating forced"));
         if (workshop.Force_heating(tod)) DEBUG_PRINTLN(F("workshop heating forced"));
@@ -167,13 +180,17 @@ void Boiler_control() {
   else {
     digitalWrite(HEATER_POWER, LOW);
     digitalWrite(BOILER_RT, LOW);
-    heating_started = false;
+    if (heating_started) {
+      EEPROM.update(BOILER_EPR_ADR, 0);
+      heating_started = false;
+      DEBUG_PRINTLN(F("Heating stoped"));
+    }
   }
 }
 
 
 void Eth_Received(char variableType, uint8_t variableIndex, String valueAsText) {
-  
+
   int value = valueAsText.toInt();
   uint8_t room_index;
   uint8_t temp_index;
@@ -216,9 +233,9 @@ void Eth_Received(char variableType, uint8_t variableIndex, String valueAsText) 
       default:
         break;
     }
-  rtc.adjust(DateTime(y, mnt, d, h, m, 0));
+    rtc.adjust(DateTime(y, mnt, d, h, m, 0));
   }
-  
+
 
 }
 
@@ -232,7 +249,7 @@ String Eth_Requested(char variableType, uint8_t variableIndex) {
       room_index = (variableIndex - 1) / 3;
       temp_index = (variableIndex - 1) % 3;
       value = rooms[room_index]->Read_temp(temp_index);
-              return  String(value);
+      return  String(value);
     }
   }
   if (variableType == 'P') {
@@ -253,15 +270,15 @@ String Eth_Requested(char variableType, uint8_t variableIndex) {
         value = (int)now.year();
         break;
       case 6:
-      ;
-      if (reset_log == false) {
-        value = 1;
-        reset_log = true;
-      }
-      else {
-        value = 0;
-      }
-      break;
+        ;
+        if (reset_log == false) {
+          value = 1;
+          reset_log = true;
+        }
+        else {
+          value = 0;
+        }
+        break;
       default:
         value = 0;
         break;
@@ -274,6 +291,11 @@ String Eth_Requested(char variableType, uint8_t variableIndex) {
 void setup()
 {
   wdt_enable(WDTO_8S);
+  pinMode(DS_VCC, OUTPUT);
+  digitalWrite(DS_VCC, HIGH);
+  pinMode(DS_GND, OUTPUT);
+  digitalWrite(DS_GND, LOW);
+  delay(100);
   Serial.begin(115200);
   DEBUG_PRINT("start setup\n\r");
   Wire.begin();
@@ -282,11 +304,22 @@ void setup()
   pinMode(BOILER_PIN, INPUT_PULLUP);
   pinMode(HEATER_POWER, OUTPUT);
   pinMode(BOILER_RT, OUTPUT);
-  digitalWrite(HEATER_POWER, LOW);
-  digitalWrite(BOILER_RT, HIGH);
-  pinMode(RELAY_6, OUTPUT);
+  uint8_t epr_boiler;
+  epr_boiler = EEPROM.read(BOILER_EPR_ADR);
+  if (epr_boiler > 0) {
+    digitalWrite(HEATER_POWER, HIGH);
+    digitalWrite(BOILER_RT, HIGH);
+    DEBUG_PRINTLN("Boiler start on");
+  }
+  else {
+    digitalWrite(HEATER_POWER, LOW);
+    digitalWrite(BOILER_RT, LOW);
+    DEBUG_PRINTLN("Boiler start off");
+  }
+
+  //inMode(RELAY_6, OUTPUT);
   pinMode(RELAY_4, OUTPUT);
-  digitalWrite(RELAY_6, HIGH);
+  //digitalWrite(RELAY_6, HIGH);
   digitalWrite(RELAY_4, HIGH);
   pinMode(A8, OUTPUT);
   digitalWrite(A8, HIGH);
@@ -310,7 +343,7 @@ void loop() {
       tod = 0;
     }
     Temperature_control();
-    Boiler_control();
+
   }
   Virtuino_run();
 

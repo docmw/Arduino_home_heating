@@ -1,5 +1,5 @@
 #include "network.h"
-
+#include <avr/wdt.h>
 byte mac[] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED};       // Set the ethernet shield mac address.
 IPAddress ip(192, 168, 0, 150);
 
@@ -10,7 +10,7 @@ const char timeServer[] = "pl.pool.ntp.org"; // time.nist.gov NTP server
 const int NTP_PACKET_SIZE = 48; // NTP time stamp is in the first 48 bytes of the message
 
 byte packetBuffer[NTP_PACKET_SIZE];
-boolean debug = true;
+boolean debug = false;
 
 
 VirtuinoCM virtuino;
@@ -38,7 +38,7 @@ void Network_begin(void (*Receive_callback)(char,uint8_t,String),String (*Reques
   virtuino.key = "1234";
   Ethernet.begin(mac, ip);
   delay(1000);
-  if (Ethernet.linkStatus() == 1) {
+  /*if (Ethernet.linkStatus() == 1) {
 
     Udp.begin(8888);
     sendNTPpacket(timeServer);
@@ -88,7 +88,7 @@ void Network_begin(void (*Receive_callback)(char,uint8_t,String),String (*Reques
     // wait ten seconds before asking for the time again
     Ethernet.maintain();
 
-  }
+  }*/
   server.begin();
 }
 
@@ -104,6 +104,7 @@ void Virtuino_run() {
     if (client.connected()) {
       client_read_time = millis();
       while (client.available() > 0) {
+        wdt_reset();
         char c = client.read();         // read the incoming data
         virtuino.readBuffer += c;       // add the incoming character to Virtuino input buffer
         if (debug) Serial.write(c);
