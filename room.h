@@ -47,13 +47,13 @@ class Room
   int Read_hum();
   void Request_sensor();
   void Read_sensor();
-  void Control_temp(uint8_t _dn);
+  void Control_temp(uint8_t _hr);
   void Heater_off();
   void Is_bathroom(uint8_t _apin);
   bool Is_heated();
   uint8_t Error_count();
   bool Force_heating(uint8_t _dn);
-  
+  uint32_t schedule;
   
   private:
   uint8_t type;
@@ -87,6 +87,7 @@ class Room
   unsigned long last_time_update;
   int16_t reading_buf;
   uint8_t reading_idx;
+  
   
   
   

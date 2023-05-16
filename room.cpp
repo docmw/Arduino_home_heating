@@ -34,6 +34,7 @@ Room::Room(uint8_t _hpin, uint16_t _eeprom_adr, float _temp_day, float _temp_nig
   last_time_update = 0 - UPDATE_INTERVAL;
   reading_idx = 0;
   reading_buf = 0;
+  schedule = 0b000000000001111111111111111000000;
 }
 
 
@@ -162,7 +163,7 @@ void Room::Request_sensor() {
 
 void Room::Read_sensor() {
   int16_t temp_read_old = temp_read;
-  int16_t temp_sensor;
+  int16_t temp_sensor = 0;
   if (type == DS18B20SENS) {
     if (sensor->available()) {
       temp_sensor = (int16_t)(sensor->readTemperature(address) * 10);
@@ -239,8 +240,9 @@ void Room::Read_sensor() {
 
 }
 
-void Room::Control_temp(uint8_t _dn) {
+void Room::Control_temp(uint8_t _hr) {
   int16_t control_temp;
+  uint8_t _dn = ((schedule >> _hr) & 1); 
   unsigned long current_time = millis();
   if (current_time - last_time_update < UPDATE_INTERVAL) {
     DEBUG_PRINT("control using temp_ext\n\r");

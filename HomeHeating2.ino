@@ -1,4 +1,4 @@
-//Rooms includes
+
 
 #include <avr/wdt.h>
 #define DEBUG
@@ -11,7 +11,7 @@
 #define DEBUG_PRINTDEC(x)
 #define DEBUG_PRINTLN(x)
 #endif
-
+//Rooms includes
 #include "room.h"
 #include <OneWire.h>
 #include <DallasTemperature.h>
@@ -29,6 +29,7 @@
 #define DS_GND A7
 
 #define BOILER_EPR_ADR 100
+#define WATER_EPR_ADR 101
 
 //RTC includes
 #include <Wire.h>
@@ -36,23 +37,33 @@
 
 
 uint8_t conversion_status = 0;
+extern int temperature_sup;
 
-
-Room kidroom (4, 0, 215, 210, 47, 1, false, false, 0, 3);
+Room kidroom (4, 0, 215, 210, 47, 1, false, false, (-5), 3);
 Room office (5, 10, 215, 210, 49, 1, false, false, 8, 4);
 Room bathroom (34, 20, 215, 210, 40, 3, false, false);
 Room bedroom (7, 30, 215, 210, 46, 1, false, true, (-8), 5);
 Room door (30, 40, 215, 210, 48, 1, true, false);
-Room salon (29, 50, 215, 210, 28, 1, true, true, (-9));
+Room salon (29, 50, 215, 210, 28, 1, true, true, (-9), 3);
 Room roof (37, 60, 215, 210, 41, 1, false, false);
 Room workshop (6, 70, 215, 210, 26, 1, false, false, 4);
 Room water (RELAY_6, 80, 280, 500, A2, 1, false, false, 0, 5);
+uint64_t water_on_schedule = 0xFE01FF83000;
 Room* rooms[] = {&kidroom, &office, &bathroom, &bedroom, &door, &salon, &roof, &workshop, &water};
 uint8_t rooms_size = sizeof(rooms) / sizeof(rooms[0]);
 uint8_t tod = 0; //time of day, day = 0, night = 1,
 bool heating = false;
 bool heating_started = false;
-enum heating_status {off, auto_h, day_h, night_h};
+typedef enum heating_control_status {OFF, AUTO_S, NIGHT_F, DAY_F, EMERGENCY, EMERGENCY_OFF};
+heating_control_status water_heating = OFF;
+heating_control_status last_water_heating;
+typedef enum module_status {M_OFF, M_ON, SET_OFF, SET_ON};
+module_status water_module_status = M_OFF;
+int lux = 0;
+typedef enum light_status {DAY_OFF, NIGHT_ON, NIGHT_OFF};
+light_status light_module_status = DAY_OFF;
+
+
 
 
 #include "network.h"
@@ -66,6 +77,10 @@ DS3231 rtc;
 unsigned long last_sens_read = 0;
 unsigned long sensors_request_time = 0;
 unsigned long last_sec_inc = 0;
+unsigned long last_min_inc = 0;
+unsigned long last_2min_inc = 0;
+unsigned long emergency_time = 0;
+
 
 
 void Temperature_control() {
@@ -138,13 +153,15 @@ void Read_sensors() {
     rooms[i]->Read_sensor();
     wdt_reset();
   }
+
 }
 
 void Heaters_control() {
-  for (uint8_t i = 0; i < rooms_size; i++) {
-    rooms[i]->Control_temp(tod);
+  for (uint8_t i = 0; i < (rooms_size - 1); i++) {
+    rooms[i]->Control_temp(now.hour());
     wdt_reset();
   }
+  Water_temp_control(now.hour(), now.minute());
 }
 
 
@@ -156,16 +173,16 @@ void Heaters_off() {
 
 void Boiler_control() {
   bool heated = true;
-  for (uint8_t i = 0; i < rooms_size; i++) {
+  for (uint8_t i = 0; i < (rooms_size - 1); i++) {
     if (!(rooms[i]->Is_heated())) {
       if (!heating_started) {
         heating_started = true;
         EEPROM.update(BOILER_EPR_ADR, 1);
         DEBUG_PRINTLN(F("Heating started"));
-        if (bedroom.Force_heating(tod)) DEBUG_PRINTLN(F("Bedroom heating forced"));
-        if (workshop.Force_heating(tod)) DEBUG_PRINTLN(F("workshop heating forced"));
-        if (kidroom.Force_heating(tod)) DEBUG_PRINTLN(F("kidroom heating forced"));
-        if (office.Force_heating(tod)) DEBUG_PRINTLN(F("office heating forced"));
+        if (bedroom.Force_heating(now.hour())) DEBUG_PRINTLN(F("Bedroom heating forced"));
+        if (workshop.Force_heating(now.hour())) DEBUG_PRINTLN(F("workshop heating forced"));
+        if (kidroom.Force_heating(now.hour())) DEBUG_PRINTLN(F("kidroom heating forced"));
+        if (office.Force_heating(now.hour())) DEBUG_PRINTLN(F("office heating forced"));
       }
       heated = false;
       break;
@@ -217,26 +234,35 @@ void Eth_Received(char variableType, uint8_t variableIndex, String valueAsText) 
     switch (variableIndex) {
       case 1:
         h = value;
+        rtc.adjust(DateTime(y, mnt, d, h, m, 0));
         break;
       case 2:
         m = value;
+        rtc.adjust(DateTime(y, mnt, d, h, m, 0));
         break;
       case 3:
         d = value;
+        rtc.adjust(DateTime(y, mnt, d, h, m, 0));
         break;
       case 4:
         mnt = value;
+        rtc.adjust(DateTime(y, mnt, d, h, m, 0));
         break;
       case 5:
         y = value;
+        rtc.adjust(DateTime(y, mnt, d, h, m, 0));
         break;
+      case 6:
+        while (1);
+        break;
+      case 7:
+        Update_water_status(value);
+        break;
+
       default:
         break;
     }
-    rtc.adjust(DateTime(y, mnt, d, h, m, 0));
   }
-
-
 }
 
 String Eth_Requested(char variableType, uint8_t variableIndex) {
@@ -279,6 +305,9 @@ String Eth_Requested(char variableType, uint8_t variableIndex) {
           value = 0;
         }
         break;
+      case 7:
+        value = (int)water_heating;
+        break;
       default:
         value = 0;
         break;
@@ -287,10 +316,212 @@ String Eth_Requested(char variableType, uint8_t variableIndex) {
   }
   return "";
 }
+void Update_water_status(int value) {
+
+  if (value == 4) {
+    emergency_time = millis();
+    if (water_heating != EMERGENCY) {
+      last_water_heating = water_heating;
+      water_heating = EMERGENCY;
+    }
+    return;
+  }
+  if (value == water_heating) {
+    return;
+  }
+  if (value == 5) {
+    water_heating = last_water_heating;
+  }
+
+  if (value < 0 || value > 4) {
+    DEBUG_PRINTLN("Wrong water status");
+  }
+  else {
+    water_heating = value;
+    EEPROM.update(WATER_EPR_ADR, value);
+    DEBUG_PRINT("Water heating set to:");
+    DEBUG_PRINTDEC(water_heating);
+  }
+}
+
+void Water_set_check() {
+
+  wdt_reset();
+  int temperature = water.Read_temp(0);
+  switch (Check_water_heater(water_heating, temperature)) {
+    case 0:
+      DEBUG_PRINTLN("water heater off");
+      Set_water_heater(1);
+      break;
+    case 1:
+      DEBUG_PRINTLN("water heater on");
+      Set_water_heater(0);
+      break;
+    case 2:
+      DEBUG_PRINTLN("water heater fault");
+      break;
+    default:
+      break;
+  }
+
+}
+
+void Water_temp_control(uint8_t h, uint8_t m) {
+  uint8_t dn;
+  uint16_t set_temp;
+  uint8_t half;
+  uint8_t bit_move;
+
+  switch (water_heating) {
+    case OFF:
+      set_temp = 100;
+      break;
+    case AUTO_S:
+      dn = ((water.schedule >> h) & 1) + 1;
+      if (m >= 30) {
+        half = 1;
+      }
+      else {
+        half = 0;
+      }
+      bit_move = (h * 2) + half;
+      if ((water_on_schedule >> bit_move) & 1) {
+        set_temp = water.Read_temp(dn);
+      }
+      else {
+        set_temp = 20;
+      }
+
+      break;
+    case DAY_F:
+      set_temp = water.Read_temp(2);
+      break;
+    case NIGHT_F:
+      set_temp = water.Read_temp(1);
+      break;
+    case EMERGENCY:
+      set_temp = 650;
+      break;
+
+  }
+
+  uint16_t sensor_temp = water.Read_temp(0);
+  int16_t delta_temp = set_temp - sensor_temp;
+
+  if (delta_temp >= 20) {
+    if (water_module_status == M_OFF || water_module_status == SET_OFF) {
+      water_module_status = SET_ON;
+      if (Set_water_heater(1)) {
+        ;
+      }
+    }
+  }
+  else if (delta_temp <= (-20)) {
+    if (water_module_status == M_ON || water_module_status == SET_ON) {
+      water_module_status = SET_OFF;
+      if (Set_water_heater(0)) {
+        ;
+      }
+    }
+  }
+}
+
+void Water_heater_control() {
+  int temperature = water.Read_temp(0);
+  uint8_t heater_status = Check_water_heater(water_heating, temperature);
+  switch (heater_status) {
+    case 0:
+      DEBUG_PRINTLN("Water module off");
+      if (water_module_status == SET_ON) {
+        Set_water_heater(1);
+      }
+      else {
+        water_module_status = M_OFF;
+      }
+      break;
+    case 1:
+      DEBUG_PRINTLN("Water module on");
+      if (water_module_status == SET_OFF) {
+        Set_water_heater(0);
+      }
+      else {
+        water_module_status = M_ON;
+      }
+      break;
+    case 2:
+      DEBUG_PRINTLN("Water module fail");
+      break;
+  }
+}
+void Light_control(void) {
+  if ((now.hour() >= 15) || (now.hour() < 0)) {
+    if ((lux < 70) && (NIGHT_ON != light_module_status)) {
+      if (Set_night_light((uint8_t)NIGHT_ON)) {
+        light_module_status = NIGHT_ON;
+        DEBUG_PRINTLN("Light module set: NIGHT_ON");
+      }
+      else {
+        DEBUG_PRINTLN("Light module set: FAILURE");
+      }
+    }
+    else if ((lux > 120) && (DAY_OFF != light_module_status)) {
+      if (Set_night_light((uint8_t)DAY_OFF)) {
+        light_module_status = DAY_OFF;
+        DEBUG_PRINTLN("Light module set: DAY_OFF");
+      }
+      else {
+        DEBUG_PRINTLN("Light module set: FAILURE");
+      }
+    }
+  }
+  else if ((now.hour() >= 0) && (now.hour() < 15)) {
+    if ((lux < 70) && (NIGHT_OFF != light_module_status)) {
+      if (Set_night_light((uint8_t)NIGHT_OFF)) {
+        light_module_status = NIGHT_OFF;
+        DEBUG_PRINTLN("Light module set: NIGHT_OFF");
+      }
+      else {
+        DEBUG_PRINTLN("Light module set: FAILURE");
+      }
+    }
+    else if ((lux > 120) && (DAY_OFF != light_module_status)) {
+      if (Set_night_light((uint8_t)DAY_OFF)) {
+        light_module_status = DAY_OFF;
+        DEBUG_PRINTLN("Light module set: DAY_OFF");
+      }
+      else {
+        DEBUG_PRINTLN("Light module set: FAILURE");
+      }
+    }
+    else {
+      ;
+    }
+  }
+  else {
+    ;
+  }
+}
+
+void Light_status_control() {
+  uint8_t light_status_read = Check_light_status();
+  if (light_status_read == light_module_status) {
+    DEBUG_PRINTLN("Light module OK");
+  }
+  else {
+    DEBUG_PRINTLN("Light module wrong status");
+    if (Set_night_light((uint8_t)light_module_status)) {
+      DEBUG_PRINTLN("Correct status set");
+    }
+    else {
+      DEBUG_PRINTLN("Correct status set failure");
+    }
+  }
+}
 
 void setup()
 {
   wdt_enable(WDTO_8S);
+  lux = 1023 - analogRead(A13);
   pinMode(DS_VCC, OUTPUT);
   digitalWrite(DS_VCC, HIGH);
   pinMode(DS_GND, OUTPUT);
@@ -316,6 +547,10 @@ void setup()
     digitalWrite(BOILER_RT, LOW);
     DEBUG_PRINTLN("Boiler start off");
   }
+  water_heating = EEPROM.read(WATER_EPR_ADR);
+  DEBUG_PRINT("Water heating start mode:");
+  DEBUG_PRINTDEC(water_heating);
+  water.schedule = 0b00000000011110000111111000000000;
 
   //inMode(RELAY_6, OUTPUT);
   pinMode(RELAY_4, OUTPUT);
@@ -324,6 +559,8 @@ void setup()
   pinMode(A8, OUTPUT);
   digitalWrite(A8, HIGH);
   Network_begin(Eth_Received, Eth_Requested);
+  //Water_set_check();
+  now = rtc.now();
   DEBUG_PRINT("setup end\n\r");
 
 }
@@ -334,7 +571,8 @@ void loop() {
   unsigned long current_time = millis();
   if ((current_time - last_sec_inc) >= 1000) {
     last_sec_inc = millis();
-
+    //Water_set_check();
+    lux = 1023 - analogRead(A13);
     now = rtc.now();
     if (now.hour() >= 23 || now.hour() < 6) {
       tod = 1;
@@ -345,6 +583,20 @@ void loop() {
     Temperature_control();
 
   }
+  if ((current_time - last_min_inc) >= 60000) {
+    last_min_inc = millis();
+    Water_heater_control();
+    if ((water_heating == EMERGENCY) && ((current_time - emergency_time) >= 600000)) {
+      water_heating = last_water_heating;
+    }
+    Light_control();
+  }
+  if ((current_time - last_2min_inc) >= 120000) {
+    last_2min_inc = millis();
+
+    Light_status_control();
+  }
+
   Virtuino_run();
 
 
