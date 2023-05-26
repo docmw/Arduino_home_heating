@@ -49,19 +49,10 @@ void Network_begin(void (*Receive_callback)(char, uint8_t, String), String (*Req
   virtuino.begin(Receive_callback, Request_callback, 256);
   virtuino.key = "1234";
   Ethernet.begin(mac, ip, myDns);
-  //char GUID[SUPLA_GUID_SIZE] = {0x54,0x3B,0xF6,0xC8,0x3F,0x17,0xFE,0xA3,0xC6,0x7F,0x81,0x57,0x79,0x3E,0x5D,0x2C};
-  //char AUTHKEY[SUPLA_AUTHKEY_SIZE] = {0x88,0x13,0x22,0xD0,0x66,0xF6,0x86,0x86,0xBC,0xC6,0xB0,0x87,0xFB,0x40,0x54,0xF4};
-  //DeviceAddress ds1addr = {0x28, 0x94, 0x35, 0x79, 0x97, 0x09, 0x03, 0x1C};
-  //new Supla::Sensor::Thermometer;
-  //new Supla::Sensor::Thermometer;
-  //new Supla::Control::Relay(A15);
+
 
   delay(1000);
 
-  /*SuplaDevice.begin(GUID,              // Global Unique Identifier
-                    "svr12.supla.org",  // SUPLA server address
-                    "marcin.wojcik.1987@interia.pl",   // Email address used to login to Supla Cloud
-                    AUTHKEY);*/
 
 
   /*if (Ethernet.linkStatus() == 1) {
